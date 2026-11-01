@@ -5,6 +5,8 @@ import type { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
 type Relationship = { source: string; target: string; type: string; direction: string };
+type Gig = { id: number; artist_id: string; artist_name: string; venue: string; city: string; country: string; event_date: string; tour: string; notes: string; source: string; source_url: string };
+type GigSearchResult = { source: string; sourceId: string; sourceUrl: string; artistId: string; artistName: string; venue: string; city: string; country: string; date: string; tour: string };
 type Artist = {
   id: string; name: string; type: string; country?: string | null;
   area?: string | null; disambiguation: string; tags: string[];
@@ -37,6 +39,17 @@ export default function Home() {
   const [status, setStatus] = useState("Search MusicBrainz to add your first artist.");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [gigs, setGigs] = useState<Gig[]>([]);
+  const [gigArtistId, setGigArtistId] = useState("");
+  const [gigVenue, setGigVenue] = useState("");
+  const [gigCity, setGigCity] = useState("");
+  const [gigDate, setGigDate] = useState("");
+  const [gigNotes, setGigNotes] = useState("");
+  const [gigTour, setGigTour] = useState("");
+  const [gigResults, setGigResults] = useState<GigSearchResult[]>([]);
+  const [gigStatus, setGigStatus] = useState("Choose an artist and search for historical performances, or enter a gig manually.");
+  const [gigSearching, setGigSearching] = useState(false);
+  const [gigSaving, setGigSaving] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -61,7 +74,9 @@ export default function Home() {
         .select("artist_id,name,artist_type,country,area,disambiguation,tags")
         .eq("user_id", user.id)
         .order("created_at", { ascending: true });
+      const gigResponse = await supabase.from("user_gigs").select("*").eq("user_id", user.id).order("event_date", { ascending: false });
       if (cancelled) return;
+      if (!gigResponse.error) setGigs((gigResponse.data ?? []) as Gig[]);
       if (error) {
         setStatus("Couldn't load your saved artists. Check the Supabase database setup.");
       } else {
@@ -158,6 +173,53 @@ export default function Home() {
     setSaving(false);
   }
 
+  async function searchHistoricalGigs() {
+    const artist = artists.find(a => a.id === gigArtistId);
+    if (!artist) { setGigStatus("Add or select an artist in your universe first."); return; }
+    if (!gigVenue.trim() && !gigCity.trim()) { setGigStatus("Enter a venue or city to search historical performances."); return; }
+    setGigSearching(true); setGigResults([]); setGigStatus("Searching historical performance records…");
+    try {
+      const params = new URLSearchParams({ artistId: artist.id, artistName: artist.name, venue: gigVenue.trim(), city: gigCity.trim() });
+      const response = await fetch(`/api/gigs/search?${params.toString()}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Historical search failed.");
+      setGigResults(payload.gigs ?? []);
+      setGigStatus(payload.gigs?.length ? `Found ${payload.gigs.length} possible performance${payload.gigs.length === 1 ? "" : "s"} via ${payload.source}. Check the details before adding.` : `${payload.note || "No historical matches found."} You can still enter the gig manually.`);
+    } catch (error) {
+      setGigStatus(error instanceof Error ? error.message : "Historical search failed. You can still enter the gig manually.");
+    } finally { setGigSearching(false); }
+  }
+
+  async function saveGig(details?: GigSearchResult) {
+    if (!user) return;
+    const artist = artists.find(a => a.id === (details?.artistId || gigArtistId));
+    if (!artist) { setGigStatus("Choose an artist from your universe first."); return; }
+    const venue = details?.venue || gigVenue.trim();
+    const date = details?.date || gigDate;
+    if (!venue || !date) { setGigStatus("A venue and performance date are required."); return; }
+    setGigSaving(true);
+    const row = {
+      user_id: user.id, artist_id: artist.id, artist_name: artist.name,
+      venue, city: details?.city || gigCity.trim(), country: details?.country || "",
+      event_date: date, tour: details?.tour || gigTour.trim(), notes: gigNotes.trim(),
+      source: details?.source || "manual", source_id: details?.sourceId || "", source_url: details?.sourceUrl || "",
+    };
+    const { data, error } = await supabase.from("user_gigs").insert(row).select("*").single();
+    if (error) setGigStatus(`Couldn't save this gig. ${error.message}`);
+    else {
+      setGigs(old => [data as Gig, ...old].sort((a,b) => b.event_date.localeCompare(a.event_date)));
+      setGigResults([]); setGigDate(""); setGigTour(""); setGigNotes("");
+      setGigStatus(`${artist.name} at ${venue} saved to your gig history.`);
+    }
+    setGigSaving(false);
+  }
+
+  async function removeGig(id: number) {
+    const { error } = await supabase.from("user_gigs").delete().eq("id", id).eq("user_id", user?.id);
+    if (error) setGigStatus(`Couldn't remove gig. ${error.message}`);
+    else setGigs(old => old.filter(g => g.id !== id));
+  }
+
   async function removeArtist(a: Artist) {
     if (!user) return;
     const { error } = await supabase.from("user_artists").delete().eq("user_id", user.id).eq("artist_id", a.id);
@@ -249,6 +311,26 @@ export default function Home() {
       {selected && <aside className="profile"><button className="close" onClick={() => setSelected(null)}>×</button><div className="profileIcon" style={{background:artistColor(selected)}}>♫</div><h2>{selected.name}</h2><p>{[selected.type, selected.area, selected.country].filter(Boolean).join(" · ")}</p><h3>MusicBrainz tags</h3><div className="tags">{selected.tags.length ? selected.tags.map(t => <span key={t}>{t}</span>) : <small>No tags supplied.</small>}</div><a href={`https://musicbrainz.org/artist/${selected.id}`} target="_blank" rel="noreferrer">Open MusicBrainz record ↗</a></aside>}
     </div>
     <div className="relationshipStatus">{relationshipStatus} {relationships.length > 0 ? `Found ${relationships.length} documented relationship${relationships.length === 1 ? "" : "s"}.` : ""}</div>
+    <section className="gigPanel">
+      <div className="gigPanelHead"><div><b>LIVE PERFORMANCES</b><p>Build your personal gig history.</p></div><span className="gigCount">{gigs.length} gigs logged</span></div>
+      <div className="gigFormGrid">
+        <label>ARTIST<select value={gigArtistId} onChange={e => setGigArtistId(e.target.value)}><option value="">Choose an artist…</option>{artists.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+        <label>VENUE<input value={gigVenue} onChange={e => setGigVenue(e.target.value)} placeholder="e.g. Manchester Arena" /></label>
+        <label>CITY (OPTIONAL)<input value={gigCity} onChange={e => setGigCity(e.target.value)} placeholder="e.g. Manchester" /></label>
+        <button className="gigSearchButton" onClick={searchHistoricalGigs} disabled={gigSearching || artists.length === 0}>{gigSearching ? "Searching…" : "Find historical performances"}</button>
+      </div>
+      <div className="gigStatus" aria-live="polite">{gigStatus}</div>
+      {gigResults.length > 0 && <div className="gigMatches"><b>HISTORICAL MATCHES — CHECK BEFORE ADDING</b>{gigResults.map((g,i) => <div className="gigMatch" key={`${g.source}-${g.sourceId}-${i}`}><div><strong>{g.date}</strong><span>{g.venue}{g.city ? ` · ${g.city}` : ""}{g.tour ? ` · ${g.tour}` : ""}</span><small>Source: {g.source}{g.source === "setlist.fm" ? " · Please retain source attribution" : ""}</small></div><button onClick={() => saveGig(g)} disabled={gigSaving}>Add gig</button></div>)}</div>}
+      <details className="manualGig"><summary>Can't find it? Add a performance manually</summary>
+        <div className="gigFormGrid manualGrid">
+          <label>PERFORMANCE DATE<input type="date" value={gigDate} onChange={e => setGigDate(e.target.value)} /></label>
+          <label>TOUR (OPTIONAL)<input value={gigTour} onChange={e => setGigTour(e.target.value)} placeholder="Tour name" /></label>
+          <label className="notesField">MEMORY / NOTES (OPTIONAL)<input value={gigNotes} onChange={e => setGigNotes(e.target.value)} placeholder="Who did you go with? Any memories?" /></label>
+          <button className="gigSearchButton" onClick={() => saveGig()} disabled={gigSaving}>{gigSaving ? "Saving…" : "Save manual gig"}</button>
+        </div>
+      </details>
+      <div className="gigHistory"><b>YOUR GIG HISTORY</b>{gigs.length ? gigs.map(g => <div className="gigHistoryRow" key={g.id}><div><strong>{new Date(`${g.event_date}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} · {g.artist_name}</strong><span>{g.venue}{g.city ? `, ${g.city}` : ""}</span>{g.tour && <small>{g.tour}</small>}{g.source_url && <a href={g.source_url} target="_blank" rel="noreferrer">View source ↗</a>}</div><button onClick={() => removeGig(g.id)} aria-label={`Remove ${g.artist_name} gig`}>Remove</button></div>) : <p>No performances logged yet.</p>}</div>
+    </section>
     <section className="artistList"><b>YOUR ARTISTS</b>{artists.length ? artists.map(a => <div className="artistRow" key={a.id}><button className="artistName" onClick={() => setSelected(a)}><span style={{background:artistColor(a)}}/>{a.name}<small>{a.type}</small></button><button className="removeArtist" onClick={() => removeArtist(a)} aria-label={`Remove ${a.name}`}>Remove</button></div>) : <p>No artists added yet.</p>}</section>
     <footer>Artist data and documented relationships powered by <a href="https://musicbrainz.org" target="_blank" rel="noreferrer">MusicBrainz</a>. Your artist collection is saved privately to your account.</footer>
   </main>;
