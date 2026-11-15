@@ -13,12 +13,9 @@ type Artist = {
 };
 const palette = ["#a78bfa", "#fb9b64", "#4dd6c3", "#60a5fa", "#f472b6", "#facc15"];
 function planetRadius(gigCount: number) {
-  const increments = [0.75, 0.60, 0.55, 0.50];
   const extraGigs = Math.max(0, gigCount - 1);
-  const initialGrowth = increments.slice(0, extraGigs).reduce((sum, increment) => sum + increment, 0);
-  // From gig six, increments decay by 10%, bounding the radius below 24.9.
-  const laterGigs = Math.max(0, extraGigs - increments.length);
-  return 18 + initialGrowth + 4.5 * (1 - Math.pow(0.9, laterGigs));
+  // Each additional gig adds 80% of the previous increment, approaching twice the base radius.
+  return 18 + 18 * (1 - Math.pow(0.8, extraGigs));
 }
 function artistColor(a: Artist) {
   const tags = a.tags.join(" ").toLowerCase();
