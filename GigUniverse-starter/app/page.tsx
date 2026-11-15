@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
+import { artistRecency } from "../lib/artist-recency";
 
 type Relationship = { source: string; target: string; type: string; direction: string };
-type Gig = { id: number; artist_id: string; artist_name: string; venue: string; city: string; country: string; event_date: string; tour: string; notes: string; source: string; source_id: string; source_url: string };
+type Gig = { id: number; user_id: string; artist_id: string; artist_name: string; venue: string; city: string; country: string; event_date: string; tour: string; notes: string; source: string; source_id: string; source_url: string };
 type GigSearchResult = { source: string; sourceId: string; sourceUrl: string; artistId: string; artistName: string; venue: string; city: string; country: string; date: string; tour: string };
 type Artist = {
   id: string; name: string; type: string; country?: string | null;
@@ -63,6 +64,12 @@ export default function Home() {
   const [gigStatus, setGigStatus] = useState("Choose an artist and search for historical performances, or enter a gig manually.");
   const [gigSearching, setGigSearching] = useState(false);
   const [gigSaving, setGigSaving] = useState(false);
+  const [recencyNow, setRecencyNow] = useState(Date.now);
+
+  useEffect(() => {
+    const timer = setInterval(() => setRecencyNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -153,6 +160,17 @@ export default function Home() {
     return counts;
   }, [gigs]);
   const availableGigResults = useMemo(() => gigResults.filter(result => !isSavedGig(result, gigs)), [gigResults, gigs]);
+  const artistRecencies = useMemo(() => {
+    const dates = new Map<string, string[]>();
+    for (const gig of gigs) {
+      if (gig.user_id !== user?.id) continue;
+      const artistDates = dates.get(gig.artist_id) ?? [];
+      artistDates.push(gig.event_date);
+      dates.set(gig.artist_id, artistDates);
+    }
+    return new Map(artists.map(artist => [artist.id, artistRecency(dates.get(artist.id) ?? [], recencyNow)]));
+  }, [gigs, artists, user?.id, recencyNow]);
+  const selectedRecency = selected ? artistRecencies.get(selected.id) : undefined;
 
   async function submitAuth(e: React.FormEvent) {
     e.preventDefault(); setAuthBusy(true); setAuthMessage("");
@@ -322,16 +340,20 @@ export default function Home() {
         })}
         {positions.map(({a,x,y}) => {
           const radius = planetRadius(gigCounts.get(a.id) ?? 0);
+          const brightness = artistRecencies.get(a.id)?.brightness;
+          const hasRecency = brightness != null;
           return <g key={a.id} className="node" onClick={() => setSelected(a)}>
-            <circle cx={x} cy={y} r={radius * 1.5} fill={artistColor(a)} opacity=".13"/>
-            <circle cx={x} cy={y} r={radius} fill={artistColor(a)}/>
+            <circle cx={x} cy={y} r={radius * 1.5} fill={artistColor(a)} opacity={hasRecency ? 0.03 + 0.22 * (brightness - 0.25) / 0.75 : 0.13}/>
+            <circle cx={x} cy={y} r={radius} fill={artistColor(a)} style={hasRecency ? {
+              filter: `brightness(${brightness}) saturate(${0.65 + 0.35 * brightness}) drop-shadow(0 0 ${6 * brightness}px ${artistColor(a)})`,
+            } : undefined}/>
             <text x={x} y={y+radius+19} textAnchor="middle">{a.name.length > 22 ? a.name.slice(0,20)+"…" : a.name}</text>
           </g>;
         })}
         {artists.length === 0 && <><text x="350" y="220" textAnchor="middle" fill="#9aa8c2" fontSize="16">Your universe starts here</text><text x="350" y="248" textAnchor="middle" fill="#71809c" fontSize="12">Search for an artist above to add your first star</text></>}
       </svg>
       <div className="legend"><span><i className="directLine"/> Documented relationship</span><span><i className="genreLine"/> Shared tags</span></div>
-      {selected && <aside className="profile"><button className="close" onClick={() => setSelected(null)}>×</button><div className="profileIcon" style={{background:artistColor(selected)}}>♫</div><h2>{selected.name}</h2><p>{[selected.type, selected.area, selected.country].filter(Boolean).join(" · ")}</p><h3>MusicBrainz tags</h3><div className="tags">{selected.tags.length ? selected.tags.map(t => <span key={t}>{t}</span>) : <small>No tags supplied.</small>}</div><a href={`https://musicbrainz.org/artist/${selected.id}`} target="_blank" rel="noreferrer">Open MusicBrainz record ↗</a></aside>}
+      {selected && <aside className="profile"><button className="close" onClick={() => setSelected(null)}>×</button><div className="profileIcon" style={{background:artistColor(selected)}}>♫</div><h2>{selected.name}</h2><p>{[selected.type, selected.area, selected.country].filter(Boolean).join(" · ")}</p><h3>Your live history</h3><p>{selectedRecency?.attendedCount ?? 0} {(selectedRecency?.attendedCount ?? 0) === 1 ? "gig" : "gigs"} attended</p><p>Most recent gig: {selectedRecency?.latestDate ? new Date(`${selectedRecency.latestDate}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "None logged"}</p><p>{selectedRecency?.description ?? "No past gigs logged"}</p><h3>MusicBrainz tags</h3><div className="tags">{selected.tags.length ? selected.tags.map(t => <span key={t}>{t}</span>) : <small>No tags supplied.</small>}</div><a href={`https://musicbrainz.org/artist/${selected.id}`} target="_blank" rel="noreferrer">Open MusicBrainz record ↗</a></aside>}
     </div>
     <div className="relationshipStatus">{relationshipStatus} {relationships.length > 0 ? `Found ${relationships.length} documented relationship${relationships.length === 1 ? "" : "s"}.` : ""}</div>
     <section className="gigPanel">
