@@ -5,13 +5,21 @@ import type { User } from "@supabase/supabase-js";
 import { supabase } from "../lib/supabase";
 
 type Relationship = { source: string; target: string; type: string; direction: string };
-type Gig = { id: number; artist_id: string; artist_name: string; venue: string; city: string; country: string; event_date: string; tour: string; notes: string; source: string; source_url: string };
+type Gig = { id: number; artist_id: string; artist_name: string; venue: string; city: string; country: string; event_date: string; tour: string; notes: string; source: string; source_id: string; source_url: string };
 type GigSearchResult = { source: string; sourceId: string; sourceUrl: string; artistId: string; artistName: string; venue: string; city: string; country: string; date: string; tour: string };
 type Artist = {
   id: string; name: string; type: string; country?: string | null;
   area?: string | null; disambiguation: string; tags: string[];
 };
 const palette = ["#a78bfa", "#fb9b64", "#4dd6c3", "#60a5fa", "#f472b6", "#facc15"];
+function isSavedGig(result: GigSearchResult, gigs: Gig[]) {
+  const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
+  return gigs.some(gig => gig.artist_id === result.artistId && (
+    (Boolean(result.sourceId) && gig.source === result.source && gig.source_id === result.sourceId) ||
+    (gig.event_date === result.date && normalize(gig.venue) === normalize(result.venue) &&
+      (!gig.city || !result.city || normalize(gig.city) === normalize(result.city)))
+  ));
+}
 function planetRadius(gigCount: number) {
   const extraGigs = Math.max(0, gigCount - 1);
   // Each additional gig adds 80% of the previous increment, approaching twice the base radius.
@@ -144,6 +152,7 @@ export default function Home() {
     for (const gig of gigs) counts.set(gig.artist_id, (counts.get(gig.artist_id) ?? 0) + 1);
     return counts;
   }, [gigs]);
+  const availableGigResults = useMemo(() => gigResults.filter(result => !isSavedGig(result, gigs)), [gigResults, gigs]);
 
   async function submitAuth(e: React.FormEvent) {
     e.preventDefault(); setAuthBusy(true); setAuthMessage("");
@@ -195,7 +204,7 @@ export default function Home() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Historical search failed.");
       setGigResults(payload.gigs ?? []);
-      setGigStatus(payload.gigs?.length ? `Found ${payload.gigs.length} possible performance${payload.gigs.length === 1 ? "" : "s"} via ${payload.source}. Check the details before adding.` : `${payload.note || "No historical matches found."} You can still enter the gig manually.`);
+      setGigStatus(payload.gigs?.length ? `Search complete via ${payload.source}. Already logged performances are hidden. Check the details before adding.` : `${payload.note || "No historical matches found."} You can still enter the gig manually.`);
     } catch (error) {
       setGigStatus(error instanceof Error ? error.message : "Historical search failed. You can still enter the gig manually.");
     } finally { setGigSearching(false); }
@@ -219,7 +228,7 @@ export default function Home() {
     if (error) setGigStatus(`Couldn't save this gig. ${error.message}`);
     else {
       setGigs(old => [data as Gig, ...old].sort((a,b) => b.event_date.localeCompare(a.event_date)));
-      setGigResults([]); setGigDate(""); setGigTour(""); setGigNotes("");
+      setGigDate(""); setGigTour(""); setGigNotes("");
       setGigStatus(`${artist.name} at ${venue} saved to your gig history.`);
     }
     setGigSaving(false);
@@ -334,7 +343,7 @@ export default function Home() {
         <button className="gigSearchButton" onClick={searchHistoricalGigs} disabled={gigSearching || artists.length === 0}>{gigSearching ? "Searching…" : "Find historical performances"}</button>
       </div>
       <div className="gigStatus" aria-live="polite">{gigStatus}</div>
-      {gigResults.length > 0 && <div className="gigMatches"><b>HISTORICAL MATCHES — CHECK BEFORE ADDING</b>{gigResults.map((g,i) => <div className="gigMatch" key={`${g.source}-${g.sourceId}-${i}`}><div><strong>{g.date}</strong><span>{g.venue}{g.city ? ` · ${g.city}` : ""}{g.tour ? ` · ${g.tour}` : ""}</span><small>Source: {g.source}{g.source === "setlist.fm" ? " · Please retain source attribution" : ""}</small></div><button onClick={() => saveGig(g)} disabled={gigSaving}>Add gig</button></div>)}</div>}
+      {gigResults.length > 0 && <div className="gigMatches"><b>HISTORICAL MATCHES — CHECK BEFORE ADDING</b>{availableGigResults.length === 0 && <p className="gigStatus">All matching performances are already in your gig history.</p>}{availableGigResults.map((g,i) => <div className="gigMatch" key={`${g.source}-${g.sourceId}-${i}`}><div><strong>{g.date}</strong><span>{g.venue}{g.city ? ` · ${g.city}` : ""}{g.tour ? ` · ${g.tour}` : ""}</span><small>Source: {g.source}{g.source === "setlist.fm" ? " · Please retain source attribution" : ""}</small></div><button onClick={() => saveGig(g)} disabled={gigSaving}>Add gig</button></div>)}</div>}
       <details className="manualGig"><summary>Can't find it? Add a performance manually</summary>
         <div className="gigFormGrid manualGrid">
           <label>PERFORMANCE DATE<input type="date" value={gigDate} onChange={e => setGigDate(e.target.value)} /></label>
