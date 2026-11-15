@@ -12,6 +12,14 @@ type Artist = {
   area?: string | null; disambiguation: string; tags: string[];
 };
 const palette = ["#a78bfa", "#fb9b64", "#4dd6c3", "#60a5fa", "#f472b6", "#facc15"];
+function planetRadius(gigCount: number) {
+  const increments = [0.75, 0.60, 0.55, 0.50];
+  const extraGigs = Math.max(0, gigCount - 1);
+  const initialGrowth = increments.slice(0, extraGigs).reduce((sum, increment) => sum + increment, 0);
+  // From gig six, increments decay by 10%, bounding the radius below 24.9.
+  const laterGigs = Math.max(0, extraGigs - increments.length);
+  return 18 + initialGrowth + 4.5 * (1 - Math.pow(0.9, laterGigs));
+}
 function artistColor(a: Artist) {
   const tags = a.tags.join(" ").toLowerCase();
   if (/metal|punk|hardcore/.test(tags)) return "#fb8585";
@@ -65,6 +73,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    setGigs([]);
     if (!authReady || !user) { setArtists([]); return; }
     let cancelled = false;
     setSaving(true);
@@ -133,6 +142,11 @@ export default function Home() {
     return links;
   }, [artists]);
   const directPairs = useMemo(() => new Set(relationships.map(r => [r.source, r.target].sort().join("|"))), [relationships]);
+  const gigCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const gig of gigs) counts.set(gig.artist_id, (counts.get(gig.artist_id) ?? 0) + 1);
+    return counts;
+  }, [gigs]);
 
   async function submitAuth(e: React.FormEvent) {
     e.preventDefault(); setAuthBusy(true); setAuthMessage("");
@@ -300,11 +314,14 @@ export default function Home() {
           const p = positions.find(x => x.a.id === g.source), q = positions.find(x => x.a.id === g.target);
           return p && q ? <line key={`genre-${i}`} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke="#7294bd" strokeWidth="1.2" strokeDasharray="3 7" opacity=".42" /> : null;
         })}
-        {positions.map(({a,x,y}) => <g key={a.id} className="node" onClick={() => setSelected(a)}>
-          <circle cx={x} cy={y} r={27} fill={artistColor(a)} opacity=".13"/>
-          <circle cx={x} cy={y} r={18} fill={artistColor(a)}/>
-          <text x={x} y={y+37} textAnchor="middle">{a.name.length > 22 ? a.name.slice(0,20)+"…" : a.name}</text>
-        </g>)}
+        {positions.map(({a,x,y}) => {
+          const radius = planetRadius(gigCounts.get(a.id) ?? 0);
+          return <g key={a.id} className="node" onClick={() => setSelected(a)}>
+            <circle cx={x} cy={y} r={radius * 1.5} fill={artistColor(a)} opacity=".13"/>
+            <circle cx={x} cy={y} r={radius} fill={artistColor(a)}/>
+            <text x={x} y={y+radius+19} textAnchor="middle">{a.name.length > 22 ? a.name.slice(0,20)+"…" : a.name}</text>
+          </g>;
+        })}
         {artists.length === 0 && <><text x="350" y="220" textAnchor="middle" fill="#9aa8c2" fontSize="16">Your universe starts here</text><text x="350" y="248" textAnchor="middle" fill="#71809c" fontSize="12">Search for an artist above to add your first star</text></>}
       </svg>
       <div className="legend"><span><i className="directLine"/> Documented relationship</span><span><i className="genreLine"/> Shared tags</span></div>
